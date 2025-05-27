@@ -1,172 +1,128 @@
-name: Daily Listing Updates and Deployment
+name: Daily Website Update and Deploy
 
 on:
   schedule:
-    # Run daily at 1 AM EST (6 AM UTC)
-    - cron: '0 6 * * *'
+    # Run daily at 1:00 AM UTC
+    - cron: '0 1 * * *'
   workflow_dispatch: # Allow manual triggering
-    inputs:
-      skip_build:
-        description: 'Skip build and only update listings'
-        required: false
-        default: 'false'
-        type: boolean
 
 jobs:
   update-and-deploy:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v1
-      with:
-        bun-version: latest
-    
-    - name: Install dependencies
-      run: bun install
-    
-    - name: Install server dependencies
-      run: |
-        cd server/functions
-        bun install
-    
-    - name: Update Current Listings
-      run: |
-        echo "Updating current listings from IDX Broker..."
-        cd server/functions
-        node update-current-listings.js
-        echo "Current listings update completed"
-      continue-on-error: true
-    
-    - name: Update Sold Listings  
-      run: |
-        echo "Updating sold listings from Homes.com..."
-        cd server/functions
-        node update-sold-listings.js
-        echo "Sold listings update completed"
-      continue-on-error: true
-    
-    - name: Generate Static Data
-      run: |
-        echo "Generating static data for export..."
-        node scripts/generate-static-data.js
-        echo "Static data generation completed"
-    
-    - name: Build Static Site
-      if: ${{ !inputs.skip_build }}
-      run: |
-        echo "Building static Next.js site..."
-        bun run build
-        echo "Build completed"
-    
-    - name: Prepare Deployment Files
-      if: ${{ !inputs.skip_build }}
-      run: |
-        echo "Preparing files for deployment..."
-        # Ensure out directory exists
-        if [ ! -d "out" ]; then
-          echo "Error: out directory not found after build"
-          exit 1
-        fi
+      - name: Checkout repository
+        uses: actions/checkout@v4
         
-        # List contents for debugging
-        echo "Contents of out directory:"
-        ls -la out/
-        
-        # Check if essential files exist
-        if [ ! -f "out/index.html" ]; then
-          echo "Warning: index.html not found in out directory"
-        fi
-        
-        echo "Deployment preparation completed"
-    
-    - name: Deploy to FTP
-      if: ${{ !inputs.skip_build }}
-      uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-      with:
-        server: ${{ secrets.FTP_SERVER }}
-        username: ${{ secrets.FTP_USERNAME }}
-        password: ${{ secrets.FTP_PASSWORD }}
-        local-dir: ./out/
-        server-dir: ./public_html/
-        exclude: |
-          **/.git*
-          **/.git*/**
-          **/node_modules/**
-          **/.next/**
-          **/.env*
-          **/README.md
-        dry-run: false
-    
-    - name: Commit Updated Data
-      run: |
-        # Configure git
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        
-        # Add updated cache files
-        git add db-cache/ public/api/ -f
-        
-        # Check if there are changes to commit
-        if git diff --staged --quiet; then
-          echo "No changes to commit"
-        else
-          # Commit the changes
-          git commit -m "Auto-update listings data - $(date '+%Y-%m-%d %H:%M:%S')"
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
           
-          # Push the changes
-          git push
-          echo "Updated listing data committed and pushed"
-        fi
-      continue-on-error: true
-    
-    - name: Ping Search Engines
-      run: |
-        echo "Notifying search engines of sitemap updates..."
+      - name: Install dependencies
+        run: bun install
         
-        # Ping Google
-        curl -s "https://www.google.com/ping?sitemap=https://westviewhomesales.com/sitemap.xml" || echo "Google ping failed"
+      - name: Install server function dependencies
+        run: |
+          cd server/functions
+          bun install
+          
+      - name: Update Current Listings
+        run: |
+          cd server/functions
+          node update-current-listings.js
+          
+      - name: Update Sold Listings (Append Only)
+        run: |
+          cd server/functions
+          node update-sold-listings.js
+          
+      - name: Generate Static Data
+        run: node scripts/generate-static-data.js
         
-        # Ping Bing
-        curl -s "https://www.bing.com/ping?sitemap=https://westviewhomesales.com/sitemap.xml" || echo "Bing ping failed"
+      - name: Build Static Site
+        run: bun run build
         
-        echo "Search engine notification completed"
-      continue-on-error: true
-    
-    - name: Create Summary
-      run: |
-        echo "## Daily Update Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Date:** $(date '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        
-        # Check if cache files were updated
-        if [ -f "db-cache/current-listings-latest.json" ]; then
-          CURRENT_COUNT=$(cat db-cache/current-listings-latest.json | grep -o '"currentListings":\[' | wc -l)
-          echo "**Current Listings:** Updated" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**Current Listings:** ❌ No data file found" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        if [ -f "db-cache/sold-listings-latest.json" ]; then
-          SOLD_COUNT=$(cat db-cache/sold-listings-latest.json | grep -o '"soldListings":\[' | wc -l)
-          echo "**Sold Listings:** Updated" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**Sold Listings:** ❌ No data file found" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        if [ -f "out/index.html" ]; then
-          echo "**Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
-          echo "**Deployment:** ✅ Completed" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "**Build Status:** ❌ Failed or skipped" >> $GITHUB_STEP_SUMMARY
-          echo "**Deployment:** ❌ Skipped" >> $GITHUB_STEP_SUMMARY
-        fi
-        
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "**Website:** https://westviewhomesales.com" >> $GITHUB_STEP_SUMMARY
+      - name: Deploy to FTP Server
+        env:
+          FTP_SERVER: ftp.westviewhomesales.com
+          FTP_USERNAME: charles@westviewhomesales.com
+          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
+        run: |
+          # Create deployment script with secrets
+          cat > deploy-secure.js << 'EOF'
+          const ftp = require('basic-ftp');
+          const fs = require('fs');
+          
+          async function deployWebsite() {
+            const client = new ftp.Client();
+            client.ftp.verbose = false;
+            
+            try {
+              console.log('Connecting to FTP server...');
+              await client.access({
+                host: process.env.FTP_SERVER,
+                user: process.env.FTP_USERNAME,
+                password: process.env.FTP_PASSWORD,
+                secure: false,
+              });
+              console.log('✓ Connected successfully!');
+              
+              // Navigate to public_html directory
+              console.log('Navigating to public_html directory...');
+              await client.cd('public_html');
+              console.log('✓ Changed to public_html directory');
+              
+              // Clear existing files
+              console.log('Clearing existing files...');
+              const list = await client.list();
+              for (const file of list) {
+                if (file.name !== '.' && file.name !== '..' && 
+                    file.name !== 'cgi-bin' && file.name !== '.htaccess') {
+                  try {
+                    if (file.type === 1) { // directory
+                      await client.removeDir(file.name);
+                    } else {
+                      await client.remove(file.name);
+                    }
+                    console.log(`Removed: ${file.name}`);
+                  } catch (error) {
+                    console.log(`Could not remove ${file.name}: ${error.message}`);
+                  }
+                }
+              }
+              
+              // Upload new files from 'out' directory
+              console.log('Uploading new files...');
+              await client.uploadFromDir('out', '.');
+              console.log('✓ Upload completed successfully!');
+              
+              // Verify upload
+              const newList = await client.list();
+              console.log(`✓ Deployment complete! ${newList.length} items in public_html`);
+              
+            } catch (error) {
+              console.error('Deployment failed:', error);
+              process.exit(1);
+            } finally {
+              client.close();
+            }
+          }
+          
+          deployWebsite();
+          EOF
+          
+          # Run the deployment script
+          node deploy-secure.js
+          
+      - name: Commit and push updated data files
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add public/data/
+          if ! git diff --staged --quiet; then
+            git commit -m "Update property listings data - $(date '+%Y-%m-%d %H:%M:%S')"
+            git push
+          else
+            echo "No changes to commit"
+          fi
