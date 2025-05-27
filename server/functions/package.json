@@ -1,0 +1,10 @@
+{
+  "name": "westview-home-sales-functions",
+  "version": "1.0.0",
+  "description": "Server functions for Westview Home Sales website",
+  "dependencies": {
+    "@sendgrid/mail": "^8.1.5",
+    "cheerio": "^1.0.0",
+    "node-fetch": "2"
+  }
+}

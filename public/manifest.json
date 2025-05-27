@@ -1,0 +1,25 @@
+{
+  "name": "Westview Home Sales by Borchini Realty",
+  "short_name": "Westview HS",
+  "description": "Find your dream home in Westview, Poinciana, Florida",
+  "start_url": "https://WestviewHomeSales.com/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "categories": ["real estate", "homes", "property"],
+  "lang": "en-US",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}

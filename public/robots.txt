@@ -1,0 +1,12 @@
+# Westview Home Sales - robots.txt
+# Allow all search engines to crawl the site
+
+User-agent: *
+Allow: /
+
+# Sitemaps
+Sitemap: https://WestviewHomeSales.com/sitemap.xml
+Sitemap: https://WestviewHomeSales.com/api/sitemap
+
+# Disallow Thank You page
+Disallow: /thank-you

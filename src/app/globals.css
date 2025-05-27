@@ -1,0 +1,138 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 220 15% 28%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 15% 28%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 15% 28%;
+    --primary: 210 85% 50%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 15% 28%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 15% 45%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 220 15% 28%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 220 13% 90%;
+    --input: 220 13% 90%;
+    --ring: 210 85% 50%;
+    --radius: 0.5rem;
+
+    /* Custom colors */
+    --active-green: 142 80% 48%;
+    --price-reduced: 9 53% 50%;
+  }
+
+  .dark {
+    --background: 220 15% 10%;
+    --foreground: 210 40% 98%;
+    --card: 220 15% 10%;
+    --card-foreground: 210 40% 98%;
+    --popover: 220 15% 10%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 210 85% 50%;
+    --primary-foreground: 220 15% 10%;
+    --secondary: 215 25% 20%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 215 25% 20%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 215 25% 20%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 60% 40%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 215 25% 20%;
+    --input: 215 25% 20%;
+    --ring: 210 85% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+  }
+  .container {
+    @apply px-4 mx-auto max-w-7xl;
+  }
+}
+
+@layer components {
+  .property-card-grid {
+    @apply grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3;
+  }
+
+  .property-badge {
+    @apply absolute top-3 left-3 font-medium text-xs px-2 py-1 rounded-sm z-10 uppercase;
+  }
+
+  .badge-active {
+    @apply bg-[hsl(var(--active-green))] text-white;
+  }
+
+  .badge-reduced {
+    @apply bg-[hsl(var(--price-reduced))] text-white;
+  }
+
+  .badge-home-type {
+    @apply absolute top-3 right-3 bg-white text-blue-600 font-medium text-xs px-2 py-1 rounded-sm z-10;
+  }
+
+  .property-details-grid {
+    @apply grid grid-cols-3 gap-2 text-center my-2;
+  }
+
+  .property-info-label {
+    @apply text-xs text-gray-500 leading-tight mb-1 font-medium;
+  }
+
+  .property-info-value {
+    @apply font-medium text-sm;
+  }
+
+  .footer-link {
+    @apply hover:text-primary transition-colors;
+  }
+}
+
+@layer utilities {
+  @media (max-width: 640px) {
+    .property-info-label {
+      @apply text-[0.65rem];
+    }
+
+    .property-info-value {
+      @apply text-xs;
+    }
+
+    h1 {
+      @apply text-2xl;
+    }
+
+    h2 {
+      @apply text-xl;
+    }
+
+    .property-badge {
+      @apply text-[0.65rem] px-1.5 py-0.5;
+    }
+  }
+
+  .xs\:flex-row {
+    flex-direction: row;
+  }
+  .xs\:grid-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .xs\:mt-0 {
+    margin-top: 0;
+  }
+}
