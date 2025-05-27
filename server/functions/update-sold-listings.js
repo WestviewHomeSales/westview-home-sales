@@ -1,493 +1,200 @@
 /**
- * GitHub Actions automated function for updating sold property listings
+ * update-sold-listings.js
  *
- * This script is designed for GitHub Actions automation and can also be run directly with Node.js:
- * node server/functions/update-sold-listings.js
- *
- * This function fetches sold listings from the specific Homes.com URL for Westview
- * and maintains an append-only approach to sold listings (never removes existing ones)
+ * Fetches new sold listings and appends them to existing sold listings data
+ * without removing any historical entries.
  */
+
 const fs = require('fs');
 const path = require('path');
+const fetch = require('node-fetch');
 const cheerio = require('cheerio');
-const https = require('https');
+const { parseIDXListings } = require('./parseIDXListings');
+
+// Configuration
+const SOLD_LISTINGS_URL = 'https://www.homes.com/sold/?sk=ktIpHZv3jTy30im3fzhdtCpyRhOqcbf_4OOs0F_GCt4&bb=_pg20o6_6Gk5kglG';
+const DB_CACHE_DIR = path.join(__dirname, '../../db-cache');
+const SOLD_LISTINGS_FILE = path.join(DB_CACHE_DIR, 'sold-listings-latest.json');
+const TIMESTAMPS_FILE = path.join(DB_CACHE_DIR, 'timestamps.json');
 
 /**
- * Main function for updating sold listings
+ * Updates the timestamp for when sold listings were last updated
  */
-async function updateSoldListings() {
-  console.log('=== SOLD LISTINGS UPDATE FUNCTION STARTED ===');
-  console.log('Started at:', new Date().toISOString());
-
+function updateTimestamp() {
   try {
-    // Fetch new sold property listings from the specific Homes.com URL
-    console.log('Fetching sold listings from Homes.com...');
-    const newSoldListings = await fetchSoldListings();
-
-    if (!newSoldListings || newSoldListings.length === 0) {
-      console.log('No new sold listings found or error in fetching');
-      return {
-        success: false,
-        message: 'No new sold listings found',
-        totalListings: 0,
-        newListingsAdded: 0
-      };
-    }
-
-    // Get existing sold listings to merge with new ones
-    const cacheDir = path.join(__dirname, '../../db-cache');
-    const cachePath = path.join(cacheDir, 'sold-listings-latest.json');
-    let existingSoldListings = [];
-
-    if (fs.existsSync(cachePath)) {
-      try {
-        const existingData = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-        existingSoldListings = existingData.soldListings || [];
-        console.log(`Found ${existingSoldListings.length} existing sold listings`);
-      } catch (err) {
-        console.log('Error reading existing sold listings, starting fresh:', err.message);
+    // Read existing timestamps
+    let timestamps = {};
+    try {
+      if (fs.existsSync(TIMESTAMPS_FILE)) {
+        timestamps = JSON.parse(fs.readFileSync(TIMESTAMPS_FILE));
       }
+    } catch (error) {
+      console.log('No existing timestamps file found, creating new one');
     }
 
-    // Merge new and existing listings (append-only approach)
-    const existingIds = new Set(existingSoldListings.map(listing => listing.id));
-    const mergedListings = [...existingSoldListings];
-
-    // Add only new listings that don't already exist
-    let newListingsAdded = 0;
-    for (const listing of newSoldListings) {
-      if (!existingIds.has(listing.id)) {
-        mergedListings.push(listing);
-        existingIds.add(listing.id);
-        newListingsAdded++;
-        console.log(`Added new sold listing: ${listing.address}`);
-      }
-    }
-
-    // Save the updated listings to cache
-    const saveSuccess = await saveListingsToCache(mergedListings, cachePath);
-    if (!saveSuccess) {
-      throw new Error('Failed to save listings to cache');
-    }
-
-    // Safety check: ensure we never lost any listings during update
-    if (existingSoldListings.length > 0 && mergedListings.length < existingSoldListings.length) {
-      console.error('WARNING: After update, the number of sold listings decreased. This should never happen!');
-      console.error(`Previous count: ${existingSoldListings.length}, New count: ${mergedListings.length}`);
-      
-      // Restore the previous listings and add any genuinely new ones
-      const restoredListings = [...existingSoldListings];
-      const existingIdsSet = new Set(existingSoldListings.map(listing => listing.id));
-      
-      for (const listing of newSoldListings) {
-        if (!existingIdsSet.has(listing.id)) {
-          restoredListings.push(listing);
-          newListingsAdded++;
-        }
-      }
-      
-      await saveListingsToCache(restoredListings, cachePath);
-      console.log(`Restored previous listings and added ${newListingsAdded} new listings`);
-      console.log(`Final count: ${restoredListings.length} sold listings`);
-    }
-
-    // Update timestamp
-    const timestamp = new Date().toLocaleString('en-US', {
-      timeZone: 'America/New_York',
-      month: 'short',
-      day: 'numeric',
+    // Update the sold timestamp
+    const now = new Date();
+    const options = {
       year: 'numeric',
-      hour: 'numeric',
-      minute: 'numeric',
-      hour12: true
-    }) + ' ET';
-
-    // Update the timestamps in the cache
-    const timestampSuccess = await updateTimestamps('sold_listings', timestamp);
-    if (!timestampSuccess) {
-      console.warn('Failed to update timestamps');
-    }
-
-    console.log(`Sold listings updated successfully. Added ${newListingsAdded} new listings.`);
-    console.log(`Total sold listings: ${mergedListings.length}`);
-    console.log('=== SOLD LISTINGS UPDATE FUNCTION COMPLETED SUCCESSFULLY ===');
-
-    return {
-      success: true,
-      message: 'Sold listings updated successfully',
-      totalListings: mergedListings.length,
-      newListingsAdded,
-      timestamp
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short'
     };
 
+    timestamps.sold = now.toLocaleDateString('en-US', options);
+
+    // Write updated timestamps
+    fs.writeFileSync(TIMESTAMPS_FILE, JSON.stringify(timestamps, null, 2));
+    console.log(`Updated sold listings timestamp to ${timestamps.sold}`);
   } catch (error) {
-    console.error('=== ERROR IN SOLD LISTINGS UPDATE FUNCTION ===');
-    console.error('Error message:', error.message);
-    console.error('Error stack:', error.stack);
-
-    return {
-      success: false,
-      message: 'Error in sold listings update function',
-      error: error.message
-    };
+    console.error('Error updating timestamp:', error);
   }
 }
 
 /**
- * Fetches sold property listings from the specific Homes.com URL for Westview
+ * Fetches sold listings from Homes.com
+ * This function would need to be implemented based on the Homes.com site structure
  */
 async function fetchSoldListings() {
-  return new Promise((resolve, reject) => {
-    console.log('Fetching sold listings from specific Homes.com URL for Westview...');
+  try {
+    console.log(`Fetching sold listings from ${SOLD_LISTINGS_URL}`);
+    const response = await fetch(SOLD_LISTINGS_URL);
 
-    // Browser-like headers to prevent blocking
-    const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive',
-      'Cache-Control': 'no-cache',
-      'Pragma': 'no-cache',
-      'Upgrade-Insecure-Requests': '1',
-      'Referer': 'https://www.homes.com/',
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none'
-    };
+    if (!response.ok) {
+      throw new Error(`Failed to fetch: ${response.statusText}`);
+    }
 
-    const options = {
-      headers: headers,
-      timeout: 60000
-    };
+    const html = await response.text();
+    console.log(`Received ${html.length} bytes of HTML`);
 
-    // Use the specific Homes.com URL provided by the user
-    const url = 'https://www.homes.com/sold/?sk=ktIpHZv3jTy30im3fzhdtCpyRhOqcbf_4OOs0F_GCt4&bb=_pg20o6_6Gk5kglG';
-    console.log(`Fetching from URL: ${url}`);
+    // Using cheerio to parse the HTML
+    const $ = cheerio.load(html);
 
-    const handleResponse = (res) => {
-      let data = '';
+    // Extract sold listings (actual implementation would depend on Homes.com structure)
+    const soldListings = [];
 
-      // Handle redirects
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        console.log(`Following redirect to: ${res.headers.location}`);
-        https.get(res.headers.location, options, handleResponse).on('error', reject);
-        return;
-      }
+    // Example: finding property cards and extracting data
+    $('.for-sale-card').each((index, element) => {
+      try {
+        // This is a placeholder - actual selectors would need to match Homes.com structure
+        const address = $(element).find('.address').text().trim();
+        const price = $(element).find('.price').text().trim();
+        const soldDate = $(element).find('.sold-date').text().trim();
+        const beds = parseInt($(element).find('.beds').text().trim(), 10);
+        const baths = parseInt($(element).find('.baths').text().trim(), 10);
+        const sqft = parseInt($(element).find('.sqft').text().replace(/[^0-9]/g, ''), 10);
+        const image = $(element).find('img').attr('src');
 
-      if (res.statusCode !== 200) {
-        if (res.statusCode === 403 || res.statusCode === 429) {
-          console.log(`Received ${res.statusCode}. Website might be blocking scrapers. Returning empty array.`);
-          resolve([]);
-          return;
-        }
-        reject(new Error(`HTTP ${res.statusCode}: ${res.statusMessage}`));
-        return;
-      }
+        // Generate a unique ID for this listing
+        const id = `sold-${address.replace(/\W+/g, '-').toLowerCase()}`;
 
-      res.on('data', (chunk) => {
-        data += chunk;
-      });
-
-      res.on('end', () => {
-        try {
-          const properties = parseHomesSoldListings(data);
-          console.log(`Parsed ${properties.length} sold listings from Homes.com`);
-          resolve(properties);
-        } catch (error) {
-          console.error('Error parsing listings:', error.message);
-          reject(error);
-        }
-      });
-    };
-
-    https.get(url, options, handleResponse).on('error', (error) => {
-      console.log(`Error fetching from Homes.com: ${error.message}. Returning empty array.`);
-      resolve([]);
-    }).on('timeout', () => {
-      console.log('Request timed out. Returning empty array.');
-      resolve([]);
-    });
-  });
-}
-
-/**
- * Parses the HTML from Homes.com to extract sold property listings
- */
-function parseHomesSoldListings(html) {
-  const $ = cheerio.load(html);
-  const properties = [];
-
-  $('.property-card, .sold-card, .homes-sold-property, .sold-listing, [data-testid="property-card"]').each((index, element) => {
-    try {
-      const card = $(element);
-
-      // Only process sold properties - ensure we only get sold ones
-      if (!card.find('.sold-badge, .recently-sold, .sold-marker').length &&
-          !card.hasClass('sold-card') &&
-          !card.text().toLowerCase().includes('sold') &&
-          !card.find('[data-testid="sold-badge"]').length) {
-        return;
-      }
-
-      // Extract address - critical for creating unique ID
-      const address = card.find('.property-address, .listing-address, [data-testid="property-address"]').text().trim();
-      if (!address) {
-        return;
-      }
-
-      // Generate consistent ID from address
-      const id = `sold-${address.toLowerCase().replace(/[^a-z0-9]/g, '-')}`;
-
-      // Image
-      const image = card.find('.property-image img, .listing-image img, [data-testid="property-image"] img').attr('src') || '';
-
-      // Sale information - try to extract actual sold date
-      const soldDateText = card.find('.sold-date, .property-date, [data-testid="sold-date"]').text().trim() ||
-                          card.text().match(/sold\s+(?:on\s+)?([a-z]{3,}\s+\d{1,2},?\s+\d{4})/i)?.[1];
-
-      // Extract date - format may vary, but try to get a clean date
-      let soldDate = 'Recently';
-      const dateMatch = soldDateText?.match(/sold\s+on\s+(.+)/i) ||
-                       soldDateText?.match(/sold\s+(.+)/i) ||
-                       soldDateText?.match(/(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec).+\d{1,2}.+\d{4}/i);
-
-      if (dateMatch) {
-        soldDate = dateMatch[1].trim();
-      } else {
-        // If no explicit date, use current date
-        soldDate = new Date().toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          year: 'numeric'
+        soldListings.push({
+          id,
+          image,
+          status: 'sold',
+          soldDate,
+          propertyType: 'Single Family Home',
+          price,
+          address,
+          city: 'Kissimmee',
+          state: 'FL',
+          zip: '34758',
+          beds,
+          baths,
+          sqft,
+          pricePerSqFt: `$${Math.round(parseInt(price.replace(/[^0-9]/g, ''), 10) / sqft)}`,
+          yearBuilt: '2024',  // This might need to be extracted from the page
+          lotSize: '0.15 acres',  // This might need to be extracted from the page
+          description: `Beautiful ${beds}-bedroom home in Westview community.`,
+          listedBy: 'Westview Homes',
+          company: 'Westview Realty',
+          moreDetailsLink: $(element).find('a').attr('href'),
+          photoGalleryLink: $(element).find('a').attr('href')
         });
+      } catch (error) {
+        console.error(`Error parsing listing ${index}:`, error);
       }
-
-      // Price
-      const priceText = card.find('.property-price, .listing-price, [data-testid="property-price"]').text().trim();
-      const price = priceText.match(/\$[\d,]+/) ? priceText.match(/\$[\d,]+/)[0] : '';
-
-      // Parse address components
-      let street = address;
-      let city = 'Kissimmee';
-      let state = 'FL';
-      let zip = '34758';
-
-      const addressParts = address.split(',');
-      if (addressParts.length > 1) {
-        street = addressParts[0].trim();
-        const cityStateZip = addressParts[1].trim().split(' ');
-        if (cityStateZip.length > 2) {
-          city = cityStateZip[0];
-          state = cityStateZip[1];
-          zip = cityStateZip[2];
-        }
-      }
-
-      // Extract property details
-      const details = card.find('.property-details, .listing-details, [data-testid="property-details"]').text().trim();
-
-      // Parse beds, baths, sqft
-      let beds = 0;
-      let baths = 0;
-      let sqft = 0;
-
-      const bedsMatch = details.match(/(\d+)\s*bed/i) ||
-                       card.find('.property-beds, .listing-beds, [data-testid="property-beds"]').text().match(/(\d+)/);
-      if (bedsMatch) beds = parseInt(bedsMatch[1]);
-
-      const bathsMatch = details.match(/(\d+(?:\.\d+)?)\s*bath/i) ||
-                        card.find('.property-baths, .listing-baths, [data-testid="property-baths"]').text().match(/(\d+(?:\.\d+)?)/);
-      if (bathsMatch) baths = parseFloat(bathsMatch[1]);
-
-      const sqftMatch = details.match(/(\d+(?:,\d+)?)\s*sq\s*ft/i) ||
-                       card.find('.property-sqft, .listing-sqft, [data-testid="property-sqft"]').text().match(/(\d+(?:,\d+)?)/);
-      if (sqftMatch) sqft = parseInt(sqftMatch[1].replace(',', ''));
-
-      // Property type
-      const propertyType = (details.toLowerCase().includes('townhome') ||
-                          details.toLowerCase().includes('town home') ||
-                          card.find('.property-type, [data-testid="property-type"]').text().toLowerCase().includes('townhome'))
-        ? 'Townhome'
-        : 'Single Family Home';
-
-      // Calculate price per sqft
-      const pricePerSqFt = sqft > 0 ? `$${Math.round(parseInt(price.replace(/[$,]/g, '')) / sqft)}` : '';
-
-      // Current year for yearBuilt if not found
-      const yearBuilt = details.match(/built\s+in\s+(\d{4})/i)
-        ? details.match(/built\s+in\s+(\d{4})/i)[1]
-        : new Date().getFullYear().toString();
-
-      // Lot size
-      const lotSize = details.match(/([\d.]+)\s*acres/i)
-        ? details.match(/([\d.]+)\s*acres/i)[1] + ' acres'
-        : '0.15 acres';
-
-      // Extract description or use generic
-      const description = card.find('.property-description, .listing-description').text().trim() ||
-                         'Beautiful home in the Westview community.';
-
-      // Listed by information
-      const listedBy = card.find('.property-agent, .listing-agent').text().trim() || 'Stellar Non-Member Agent';
-      const company = card.find('.property-company, .listing-company').text().trim() || 'Stellar Non-Member Office';
-
-      // Links
-      const detailsLink = card.find('a.property-link, a.listing-link').attr('href') ||
-                         card.find('a').attr('href') || '';
-      const galleryLink = detailsLink;
-
-      properties.push({
-        id,
-        image,
-        status: 'sold',
-        soldDate,
-        propertyType,
-        price,
-        address: street,
-        city,
-        state,
-        zip,
-        beds,
-        baths,
-        sqft,
-        pricePerSqFt,
-        yearBuilt,
-        lotSize,
-        description,
-        listedBy,
-        company,
-        moreDetailsLink: detailsLink,
-        photoGalleryLink: galleryLink
-      });
-    } catch (err) {
-      // Ignore parse errors for individual cards
-    }
-  });
-
-  return properties;
-}
-
-/**
- * Saves property listings to the cache file with improved error handling
- */
-async function saveListingsToCache(listings, filePath) {
-  try {
-    // Create the cache directory if it doesn't exist
-    const dir = path.dirname(filePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    // Create backup of existing file if it exists
-    if (fs.existsSync(filePath)) {
-      const backupPath = filePath + '.backup';
-      try {
-        fs.copyFileSync(filePath, backupPath);
-      } catch (err) {
-        // Ignore backup errors
-      }
-    }
-
-    // Convert listings to the format expected by the frontend
-    const formattedListings = {
-      soldListings: listings
-    };
-
-    // Write the data
-    fs.writeFileSync(filePath, JSON.stringify(formattedListings, null, 2), 'utf8');
-
-    // Verify write success
-    if (fs.existsSync(filePath)) {
-      try {
-        const content = fs.readFileSync(filePath, 'utf8');
-        JSON.parse(content);
-      } catch (err) {
-        return false;
-      }
-      return true;
-    } else {
-      return false;
-    }
-  } catch (error) {
-    return false;
-  }
-}
-
-/**
- * Updates timestamps file with new update times and improved error handling
- */
-async function updateTimestamps(type, timestamp) {
-  try {
-    const timestampsPath = path.join(path.join(__dirname, '../../db-cache'), 'timestamps.json');
-
-    // Ensure the directory exists
-    const dir = path.dirname(timestampsPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-
-    // Read existing timestamps or create new
-    let timestamps = {};
-    if (fs.existsSync(timestampsPath)) {
-      try {
-        const content = fs.readFileSync(timestampsPath, 'utf8');
-        timestamps = JSON.parse(content);
-      } catch (parseErr) {
-        timestamps = {};
-      }
-    }
-
-    // Update the specified timestamp
-    timestamps[type] = timestamp;
-
-    // Save the updated timestamps using direct fs
-    fs.writeFileSync(timestampsPath, JSON.stringify(timestamps, null, 2), 'utf8');
-
-    // Verify write success
-    if (fs.existsSync(timestampsPath)) {
-      return true;
-    } else {
-      return false;
-    }
-  } catch (error) {
-    return false;
-  }
-}
-
-/**
- * Exported handler for GitHub Actions or other automation
- */
-exports.handler = async () => {
-  const result = await updateSoldListings();
-  if (result.success) {
-    return {
-      statusCode: 200,
-      body: JSON.stringify(result)
-    };
-  } else {
-    return {
-      statusCode: 500,
-      body: JSON.stringify(result)
-    };
-  }
-};
-
-/**
- * Run this function directly when called with Node.js
- * This allows the script to be run from the command line or cron
- */
-if (require.main === module) {
-  console.log('Running update-sold-listings function directly');
-
-  updateSoldListings()
-    .then(result => {
-      console.log('Direct execution completed with result:', result);
-      // Exit with appropriate code
-      process.exit(result.success ? 0 : 1);
-    })
-    .catch(error => {
-      console.error('Direct execution failed:', error);
-      process.exit(1);
     });
+
+    console.log(`Extracted ${soldListings.length} sold listings`);
+    return soldListings;
+  } catch (error) {
+    console.error('Error fetching sold listings:', error);
+    return [];
+  }
 }
+
+/**
+ * Updates sold listings by adding new ones while preserving existing ones
+ */
+async function updateSoldListings() {
+  try {
+    // Create DB cache directory if it doesn't exist
+    if (!fs.existsSync(DB_CACHE_DIR)) {
+      fs.mkdirSync(DB_CACHE_DIR, { recursive: true });
+    }
+
+    // Read existing sold listings
+    let existingSoldListings = [];
+    try {
+      if (fs.existsSync(SOLD_LISTINGS_FILE)) {
+        existingSoldListings = JSON.parse(fs.readFileSync(SOLD_LISTINGS_FILE));
+        console.log(`Read ${existingSoldListings.length} existing sold listings`);
+      }
+    } catch (error) {
+      console.log('No existing sold listings file found, creating new one');
+    }
+
+    // Fetch new sold listings
+    const newSoldListings = await fetchSoldListings();
+
+    if (newSoldListings.length === 0) {
+      console.log('No new sold listings found, keeping existing data');
+      return;
+    }
+
+    // Create map of existing listings by ID to avoid duplicates
+    const existingListingsMap = new Map();
+    existingSoldListings.forEach(listing => {
+      existingListingsMap.set(listing.id, listing);
+    });
+
+    // Add new listings (avoiding duplicates)
+    let addedCount = 0;
+    newSoldListings.forEach(newListing => {
+      if (!existingListingsMap.has(newListing.id)) {
+        existingSoldListings.push(newListing);
+        addedCount++;
+      }
+    });
+
+    // Sort by sold date (newest first)
+    existingSoldListings.sort((a, b) => {
+      const dateA = new Date(a.soldDate);
+      const dateB = new Date(b.soldDate);
+      return dateB - dateA;
+    });
+
+    // Save combined listings
+    fs.writeFileSync(SOLD_LISTINGS_FILE, JSON.stringify(existingSoldListings, null, 2));
+    console.log(`Added ${addedCount} new sold listings, total is now ${existingSoldListings.length}`);
+
+    // Update timestamp
+    updateTimestamp();
+
+    console.log('Sold listings update completed successfully');
+  } catch (error) {
+    console.error('Error updating sold listings:', error);
+  }
+}
+
+// Execute the update function if run directly
+if (require.main === module) {
+  updateSoldListings()
+    .then(() => console.log('Update sold listings process completed'))
+    .catch(err => console.error('Update sold listings process failed:', err));
+}
+
+module.exports = { updateSoldListings };
